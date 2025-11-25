@@ -34,6 +34,8 @@
 
 #include <zephyr/logging/log.h>
 
+#include <zephyr/drivers/gpio.h>
+
 #define LOG_MODULE_NAME peripheral_uart
 LOG_MODULE_REGISTER(LOG_MODULE_NAME);
 
@@ -87,6 +89,76 @@ UART_ASYNC_ADAPTER_INST_DEFINE(async_adapter);
 #else
 #define async_adapter NULL
 #endif
+
+static bool ble_connected = false;
+
+#include <zephyr/device.h>
+#include <zephyr/drivers/gpio.h>
+#include <zephyr/kernel.h>
+#include <zephyr/device.h>
+#include <zephyr/drivers/gpio.h>
+#include <zephyr/kernel.h>
+
+#define FEM_PDN_PIN   20   /* P0.20 */
+#define FEM_TXEN_PIN  19   /* P0.19 */
+#define FEM_RXEN_PIN  31   /* P0.31 */
+#define FEM_MODE_PIN  9    /* P1.09 */
+
+static const struct device *gpio0;
+static const struct device *gpio1;
+
+static void fem_test_init(void)
+{
+    gpio0 = DEVICE_DT_GET(DT_NODELABEL(gpio0));
+    gpio1 = DEVICE_DT_GET(DT_NODELABEL(gpio1));
+
+    if (!device_is_ready(gpio0) || !device_is_ready(gpio1)) {
+        printk("FEM test: GPIO ports not ready (gpio0=%p, gpio1=%p)\n", gpio0, gpio1);
+        return;
+    }
+
+    int ret;
+
+    // All P0.x pins on gpio0
+    ret = gpio_pin_configure(gpio0, FEM_PDN_PIN,  GPIO_OUTPUT_INACTIVE);
+    printk("cfg PDN ret=%d\n", ret);
+    ret = gpio_pin_configure(gpio0, FEM_TXEN_PIN, GPIO_OUTPUT_INACTIVE);
+    printk("cfg TXEN ret=%d\n", ret);
+    ret = gpio_pin_configure(gpio0, FEM_RXEN_PIN, GPIO_OUTPUT_INACTIVE);
+    printk("cfg RXEN ret=%d\n", ret);
+
+    // P1.9 on gpio1
+    ret = gpio_pin_configure(gpio1, FEM_MODE_PIN, GPIO_OUTPUT_INACTIVE);
+    printk("cfg MODE ret=%d\n", ret);
+
+    // Power up FEM and set MODE=1
+    gpio_pin_set(gpio0, FEM_PDN_PIN, 1);   // P0.20
+    gpio_pin_set(gpio1, FEM_MODE_PIN, 1);  // P1.09
+
+    printk("FEM test: PDN=1, MODE=1\n");
+}
+
+static void fem_test_pulse(void)
+{
+    printk("FEM test: pulsing TX_EN / RX_EN (slow)\n");
+
+    while(1) {
+        // TX_EN on P0.19 (gpio0)
+        gpio_pin_set(gpio0, FEM_TXEN_PIN, 1);
+        k_msleep(200);
+        gpio_pin_set(gpio0, FEM_TXEN_PIN, 0);
+        k_msleep(200);
+
+        // RX_EN on P0.31 (gpio0)
+        gpio_pin_set(gpio0, FEM_RXEN_PIN, 1);
+        k_msleep(200);
+        gpio_pin_set(gpio0, FEM_RXEN_PIN, 0);
+        k_msleep(200);
+    }
+
+    printk("FEM test: done\n");
+}
+
 
 static void uart_cb(const struct device *dev, struct uart_event *evt, void *user_data)
 {
@@ -362,6 +434,8 @@ static void connected(struct bt_conn *conn, uint8_t err)
 
 	bt_addr_le_to_str(bt_conn_get_dst(conn), addr, sizeof(addr));
 	LOG_INF("Connected %s", addr);
+	
+	ble_connected = true;
 
 	current_conn = bt_conn_ref(conn);
 
@@ -370,6 +444,9 @@ static void connected(struct bt_conn *conn, uint8_t err)
 
 static void disconnected(struct bt_conn *conn, uint8_t reason)
 {
+	
+	ble_connected = false;
+
 	char addr[BT_ADDR_LE_STR_LEN];
 
 	bt_addr_le_to_str(bt_conn_get_dst(conn), addr, sizeof(addr));
@@ -606,12 +683,17 @@ int main(void)
 	int blink_status = 0;
 	int err = 0;
 
-	configure_gpio();
+	// fem_test_init();
+    // fem_test_pulse();   /* put the scope on TX_EN/RX_EN now */
 
-	err = uart_init();
-	if (err) {
-		error();
-	}
+	// while(1);
+	
+	//configure_gpio();
+
+	// err = uart_init();
+	// if (err) {
+	// 	error();
+	// }
 
 	if (IS_ENABLED(CONFIG_BT_NUS_SECURITY_ENABLED)) {
 		err = bt_conn_auth_cb_register(&conn_auth_callbacks);
@@ -656,40 +738,52 @@ int main(void)
 }
 
 void ble_write_thread(void)
-{
-	/* Don't go any further until BLE is initialized */
-	k_sem_take(&ble_init_ok, K_FOREVER);
-	struct uart_data_t nus_data = {
-		.len = 0,
-	};
+{	
+	int counter = 0;
+	uint8_t msg[100];
+	int16_t tx_size = 0;
 
-	for (;;) {
-		/* Wait indefinitely for data to be sent over bluetooth */
-		struct uart_data_t *buf = k_fifo_get(&fifo_uart_rx_data,
-						     K_FOREVER);
-
-		int plen = MIN(sizeof(nus_data.data) - nus_data.len, buf->len);
-		int loc = 0;
-
-		while (plen > 0) {
-			memcpy(&nus_data.data[nus_data.len], &buf->data[loc], plen);
-			nus_data.len += plen;
-			loc += plen;
-
-			if (nus_data.len >= sizeof(nus_data.data) ||
-			   (nus_data.data[nus_data.len - 1] == '\n') ||
-			   (nus_data.data[nus_data.len - 1] == '\r')) {
-				if (bt_nus_send(NULL, nus_data.data, nus_data.len)) {
-					LOG_WRN("Failed to send data over BLE connection");
-				}
-				nus_data.len = 0;
-			}
-
-			plen = MIN(sizeof(nus_data.data), buf->len - loc);
-		}
-
-		k_free(buf);
+	while(1)
+	{
+		tx_size = sprintf(msg, "[%d] Sending data\r\n", counter++);
+		if(ble_connected)
+			bt_nus_send(NULL, msg, tx_size);
+		k_sleep(K_MSEC(1000));
 	}
+
+	// /* Don't go any further until BLE is initialized */
+	// k_sem_take(&ble_init_ok, K_FOREVER);
+	// struct uart_data_t nus_data = {
+	// 	.len = 0,
+	// };
+
+	// for (;;) {
+	// 	/* Wait indefinitely for data to be sent over bluetooth */
+	// 	struct uart_data_t *buf = k_fifo_get(&fifo_uart_rx_data,
+	// 					     K_FOREVER);
+
+	// 	int plen = MIN(sizeof(nus_data.data) - nus_data.len, buf->len);
+	// 	int loc = 0;
+
+	// 	while (plen > 0) {
+	// 		memcpy(&nus_data.data[nus_data.len], &buf->data[loc], plen);
+	// 		nus_data.len += plen;
+	// 		loc += plen;
+
+	// 		if (nus_data.len >= sizeof(nus_data.data) ||
+	// 		   (nus_data.data[nus_data.len - 1] == '\n') ||
+	// 		   (nus_data.data[nus_data.len - 1] == '\r')) {
+	// 			if (bt_nus_send(NULL, nus_data.data, nus_data.len)) {
+	// 				LOG_WRN("Failed to send data over BLE connection");
+	// 			}
+	// 			nus_data.len = 0;
+	// 		}
+
+	// 		plen = MIN(sizeof(nus_data.data), buf->len - loc);
+	// 	}
+
+	// 	k_free(buf);
+	// }
 }
 
 K_THREAD_DEFINE(ble_write_thread_id, STACKSIZE, ble_write_thread, NULL, NULL,

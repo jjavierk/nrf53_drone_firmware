@@ -1,0 +1,26 @@
+/ {
+    /* NUS UART chosen (keeps peripheral_uart happy) */
+    chosen {
+        nordic,nus-uart = &uart0;  /* or &cdc_acm0 if you want USB CDC */
+    };
+
+    /* Disable LED3, since we use P0.31 for nRF21540 RX_EN */
+    leds {
+        led3: led_3 {
+            status = "disabled";
+        };
+    };
+
+    /* Forward FEM GPIOs from app core to net core */
+    gpio_fwd: nrf-gpio-forwarder {
+        compatible = "nordic,nrf-gpio-forwarder";
+        status = "okay";
+
+        nrf21540-gpio-if {
+            gpios = <&gpio0 19 0>,   /* TX_EN */
+                    <&gpio0 31 0>,   /* RX_EN */
+                    <&gpio0 20 0>,   /* PDN */
+                    <&gpio1 9  0>;   /* MODE */
+        };
+    };
+};

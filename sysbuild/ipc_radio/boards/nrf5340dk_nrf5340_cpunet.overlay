@@ -1,0 +1,18 @@
+/ {
+    nrf_radio_fem: nrf21540_fem {
+        compatible = "nordic,nrf21540-fem";
+        status = "okay";
+
+        /* Use your real supply voltage here; 1800 for 1.8 V */
+        supply-voltage-mv = <1800>;
+
+        tx-en-gpios = <&gpio0 19 GPIO_ACTIVE_HIGH>;
+        rx-en-gpios = <&gpio0 31 GPIO_ACTIVE_HIGH>;
+        pdn-gpios   = <&gpio0 20 GPIO_ACTIVE_HIGH>;
+        mode-gpios  = <&gpio1 9  GPIO_ACTIVE_HIGH>;
+    };
+};
+
+&radio {
+    fem = <&nrf_radio_fem>;
+};

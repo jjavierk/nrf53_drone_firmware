@@ -1,0 +1,7 @@
+{
+    "files.associations": {
+        "hci.h": "c",
+        "errno.h": "c",
+        "gpio.h": "c"
+    }
+}
