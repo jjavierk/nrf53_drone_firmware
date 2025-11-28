@@ -16,3 +16,7 @@
 &radio {
     fem = <&nrf_radio_fem>;
 };
+
+&uart0 {
+    status = "disabled";
+};

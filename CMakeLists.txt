@@ -11,6 +11,7 @@ project(peripheral_uart)
 # NORDIC SDK APP START
 target_sources(app PRIVATE
   src/main.c
+  src/spi_slave.c
 )
 
 # NORDIC SDK APP END

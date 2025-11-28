@@ -107,6 +107,14 @@ static bool ble_connected = false;
 static const struct device *gpio0;
 static const struct device *gpio1;
 
+void spi_slave_init(void);
+
+void ble_send(uint8_t *data, int size)
+{
+	if(ble_connected)
+		bt_nus_send(NULL, data, size);
+}
+
 static void fem_test_init(void)
 {
     gpio0 = DEVICE_DT_GET(DT_NODELABEL(gpio0));
@@ -160,251 +168,251 @@ static void fem_test_pulse(void)
 }
 
 
-static void uart_cb(const struct device *dev, struct uart_event *evt, void *user_data)
-{
-	ARG_UNUSED(dev);
+// static void uart_cb(const struct device *dev, struct uart_event *evt, void *user_data)
+// {
+// 	ARG_UNUSED(dev);
 
-	static size_t aborted_len;
-	struct uart_data_t *buf;
-	static uint8_t *aborted_buf;
-	static bool disable_req;
+// 	static size_t aborted_len;
+// 	struct uart_data_t *buf;
+// 	static uint8_t *aborted_buf;
+// 	static bool disable_req;
 
-	switch (evt->type) {
-	case UART_TX_DONE:
-		LOG_DBG("UART_TX_DONE");
-		if ((evt->data.tx.len == 0) ||
-		    (!evt->data.tx.buf)) {
-			return;
-		}
+// 	switch (evt->type) {
+// 	case UART_TX_DONE:
+// 		LOG_DBG("UART_TX_DONE");
+// 		if ((evt->data.tx.len == 0) ||
+// 		    (!evt->data.tx.buf)) {
+// 			return;
+// 		}
 
-		if (aborted_buf) {
-			buf = CONTAINER_OF(aborted_buf, struct uart_data_t,
-					   data[0]);
-			aborted_buf = NULL;
-			aborted_len = 0;
-		} else {
-			buf = CONTAINER_OF(evt->data.tx.buf, struct uart_data_t,
-					   data[0]);
-		}
+// 		if (aborted_buf) {
+// 			buf = CONTAINER_OF(aborted_buf, struct uart_data_t,
+// 					   data[0]);
+// 			aborted_buf = NULL;
+// 			aborted_len = 0;
+// 		} else {
+// 			buf = CONTAINER_OF(evt->data.tx.buf, struct uart_data_t,
+// 					   data[0]);
+// 		}
 
-		k_free(buf);
+// 		k_free(buf);
 
-		buf = k_fifo_get(&fifo_uart_tx_data, K_NO_WAIT);
-		if (!buf) {
-			return;
-		}
+// 		buf = k_fifo_get(&fifo_uart_tx_data, K_NO_WAIT);
+// 		if (!buf) {
+// 			return;
+// 		}
 
-		if (uart_tx(uart, buf->data, buf->len, SYS_FOREVER_MS)) {
-			LOG_WRN("Failed to send data over UART");
-		}
+// 		if (uart_tx(uart, buf->data, buf->len, SYS_FOREVER_MS)) {
+// 			LOG_WRN("Failed to send data over UART");
+// 		}
 
-		break;
+// 		break;
 
-	case UART_RX_RDY:
-		LOG_DBG("UART_RX_RDY");
-		buf = CONTAINER_OF(evt->data.rx.buf, struct uart_data_t, data[0]);
-		buf->len += evt->data.rx.len;
+// 	case UART_RX_RDY:
+// 		LOG_DBG("UART_RX_RDY");
+// 		buf = CONTAINER_OF(evt->data.rx.buf, struct uart_data_t, data[0]);
+// 		buf->len += evt->data.rx.len;
 
-		if (disable_req) {
-			return;
-		}
+// 		if (disable_req) {
+// 			return;
+// 		}
 
-		if ((evt->data.rx.buf[buf->len - 1] == '\n') ||
-		    (evt->data.rx.buf[buf->len - 1] == '\r')) {
-			disable_req = true;
-			uart_rx_disable(uart);
-		}
+// 		if ((evt->data.rx.buf[buf->len - 1] == '\n') ||
+// 		    (evt->data.rx.buf[buf->len - 1] == '\r')) {
+// 			disable_req = true;
+// 			uart_rx_disable(uart);
+// 		}
 
-		break;
+// 		break;
 
-	case UART_RX_DISABLED:
-		LOG_DBG("UART_RX_DISABLED");
-		disable_req = false;
+// 	case UART_RX_DISABLED:
+// 		LOG_DBG("UART_RX_DISABLED");
+// 		disable_req = false;
 
-		buf = k_malloc(sizeof(*buf));
-		if (buf) {
-			buf->len = 0;
-		} else {
-			LOG_WRN("Not able to allocate UART receive buffer");
-			k_work_reschedule(&uart_work, UART_WAIT_FOR_BUF_DELAY);
-			return;
-		}
+// 		buf = k_malloc(sizeof(*buf));
+// 		if (buf) {
+// 			buf->len = 0;
+// 		} else {
+// 			LOG_WRN("Not able to allocate UART receive buffer");
+// 			k_work_reschedule(&uart_work, UART_WAIT_FOR_BUF_DELAY);
+// 			return;
+// 		}
 
-		uart_rx_enable(uart, buf->data, sizeof(buf->data),
-			       UART_WAIT_FOR_RX);
+// 		uart_rx_enable(uart, buf->data, sizeof(buf->data),
+// 			       UART_WAIT_FOR_RX);
 
-		break;
+// 		break;
 
-	case UART_RX_BUF_REQUEST:
-		LOG_DBG("UART_RX_BUF_REQUEST");
-		buf = k_malloc(sizeof(*buf));
-		if (buf) {
-			buf->len = 0;
-			uart_rx_buf_rsp(uart, buf->data, sizeof(buf->data));
-		} else {
-			LOG_WRN("Not able to allocate UART receive buffer");
-		}
+// 	case UART_RX_BUF_REQUEST:
+// 		LOG_DBG("UART_RX_BUF_REQUEST");
+// 		buf = k_malloc(sizeof(*buf));
+// 		if (buf) {
+// 			buf->len = 0;
+// 			uart_rx_buf_rsp(uart, buf->data, sizeof(buf->data));
+// 		} else {
+// 			LOG_WRN("Not able to allocate UART receive buffer");
+// 		}
 
-		break;
+// 		break;
 
-	case UART_RX_BUF_RELEASED:
-		LOG_DBG("UART_RX_BUF_RELEASED");
-		buf = CONTAINER_OF(evt->data.rx_buf.buf, struct uart_data_t,
-				   data[0]);
+// 	case UART_RX_BUF_RELEASED:
+// 		LOG_DBG("UART_RX_BUF_RELEASED");
+// 		buf = CONTAINER_OF(evt->data.rx_buf.buf, struct uart_data_t,
+// 				   data[0]);
 
-		if (buf->len > 0) {
-			k_fifo_put(&fifo_uart_rx_data, buf);
-		} else {
-			k_free(buf);
-		}
+// 		if (buf->len > 0) {
+// 			k_fifo_put(&fifo_uart_rx_data, buf);
+// 		} else {
+// 			k_free(buf);
+// 		}
 
-		break;
+// 		break;
 
-	case UART_TX_ABORTED:
-		LOG_DBG("UART_TX_ABORTED");
-		if (!aborted_buf) {
-			aborted_buf = (uint8_t *)evt->data.tx.buf;
-		}
+// 	case UART_TX_ABORTED:
+// 		LOG_DBG("UART_TX_ABORTED");
+// 		if (!aborted_buf) {
+// 			aborted_buf = (uint8_t *)evt->data.tx.buf;
+// 		}
 
-		aborted_len += evt->data.tx.len;
-		buf = CONTAINER_OF((void *)aborted_buf, struct uart_data_t,
-				   data);
+// 		aborted_len += evt->data.tx.len;
+// 		buf = CONTAINER_OF((void *)aborted_buf, struct uart_data_t,
+// 				   data);
 
-		uart_tx(uart, &buf->data[aborted_len],
-			buf->len - aborted_len, SYS_FOREVER_MS);
+// 		uart_tx(uart, &buf->data[aborted_len],
+// 			buf->len - aborted_len, SYS_FOREVER_MS);
 
-		break;
+// 		break;
 
-	default:
-		break;
-	}
-}
+// 	default:
+// 		break;
+// 	}
+// }
 
-static void uart_work_handler(struct k_work *item)
-{
-	struct uart_data_t *buf;
+// static void uart_work_handler(struct k_work *item)
+// {
+// 	struct uart_data_t *buf;
 
-	buf = k_malloc(sizeof(*buf));
-	if (buf) {
-		buf->len = 0;
-	} else {
-		LOG_WRN("Not able to allocate UART receive buffer");
-		k_work_reschedule(&uart_work, UART_WAIT_FOR_BUF_DELAY);
-		return;
-	}
+// 	buf = k_malloc(sizeof(*buf));
+// 	if (buf) {
+// 		buf->len = 0;
+// 	} else {
+// 		LOG_WRN("Not able to allocate UART receive buffer");
+// 		k_work_reschedule(&uart_work, UART_WAIT_FOR_BUF_DELAY);
+// 		return;
+// 	}
 
-	uart_rx_enable(uart, buf->data, sizeof(buf->data), UART_WAIT_FOR_RX);
-}
+// 	uart_rx_enable(uart, buf->data, sizeof(buf->data), UART_WAIT_FOR_RX);
+// }
 
-static bool uart_test_async_api(const struct device *dev)
-{
-	const struct uart_driver_api *api =
-			(const struct uart_driver_api *)dev->api;
+// static bool uart_test_async_api(const struct device *dev)
+// {
+// 	const struct uart_driver_api *api =
+// 			(const struct uart_driver_api *)dev->api;
 
-	return (api->callback_set != NULL);
-}
+// 	return (api->callback_set != NULL);
+// }
 
-static int uart_init(void)
-{
-	int err;
-	int pos;
-	struct uart_data_t *rx;
-	struct uart_data_t *tx;
+// static int uart_init(void)
+// {
+// 	int err;
+// 	int pos;
+// 	struct uart_data_t *rx;
+// 	struct uart_data_t *tx;
 
-	if (!device_is_ready(uart)) {
-		return -ENODEV;
-	}
+// 	if (!device_is_ready(uart)) {
+// 		return -ENODEV;
+// 	}
 
-	if (IS_ENABLED(CONFIG_USB_DEVICE_STACK)) {
-		err = usb_enable(NULL);
-		if (err && (err != -EALREADY)) {
-			LOG_ERR("Failed to enable USB");
-			return err;
-		}
-	}
+// 	if (IS_ENABLED(CONFIG_USB_DEVICE_STACK)) {
+// 		err = usb_enable(NULL);
+// 		if (err && (err != -EALREADY)) {
+// 			LOG_ERR("Failed to enable USB");
+// 			return err;
+// 		}
+// 	}
 
-	rx = k_malloc(sizeof(*rx));
-	if (rx) {
-		rx->len = 0;
-	} else {
-		return -ENOMEM;
-	}
+// 	rx = k_malloc(sizeof(*rx));
+// 	if (rx) {
+// 		rx->len = 0;
+// 	} else {
+// 		return -ENOMEM;
+// 	}
 
-	k_work_init_delayable(&uart_work, uart_work_handler);
+// 	k_work_init_delayable(&uart_work, uart_work_handler);
 
 
-	if (IS_ENABLED(CONFIG_UART_ASYNC_ADAPTER) && !uart_test_async_api(uart)) {
-		/* Implement API adapter */
-		uart_async_adapter_init(async_adapter, uart);
-		uart = async_adapter;
-	}
+// 	if (IS_ENABLED(CONFIG_UART_ASYNC_ADAPTER) && !uart_test_async_api(uart)) {
+// 		/* Implement API adapter */
+// 		uart_async_adapter_init(async_adapter, uart);
+// 		uart = async_adapter;
+// 	}
 
-	err = uart_callback_set(uart, uart_cb, NULL);
-	if (err) {
-		k_free(rx);
-		LOG_ERR("Cannot initialize UART callback");
-		return err;
-	}
+// 	err = uart_callback_set(uart, uart_cb, NULL);
+// 	if (err) {
+// 		k_free(rx);
+// 		LOG_ERR("Cannot initialize UART callback");
+// 		return err;
+// 	}
 
-	if (IS_ENABLED(CONFIG_UART_LINE_CTRL)) {
-		LOG_INF("Wait for DTR");
-		while (true) {
-			uint32_t dtr = 0;
+// 	if (IS_ENABLED(CONFIG_UART_LINE_CTRL)) {
+// 		LOG_INF("Wait for DTR");
+// 		while (true) {
+// 			uint32_t dtr = 0;
 
-			uart_line_ctrl_get(uart, UART_LINE_CTRL_DTR, &dtr);
-			if (dtr) {
-				break;
-			}
-			/* Give CPU resources to low priority threads. */
-			k_sleep(K_MSEC(100));
-		}
-		LOG_INF("DTR set");
-		err = uart_line_ctrl_set(uart, UART_LINE_CTRL_DCD, 1);
-		if (err) {
-			LOG_WRN("Failed to set DCD, ret code %d", err);
-		}
-		err = uart_line_ctrl_set(uart, UART_LINE_CTRL_DSR, 1);
-		if (err) {
-			LOG_WRN("Failed to set DSR, ret code %d", err);
-		}
-	}
+// 			uart_line_ctrl_get(uart, UART_LINE_CTRL_DTR, &dtr);
+// 			if (dtr) {
+// 				break;
+// 			}
+// 			/* Give CPU resources to low priority threads. */
+// 			k_sleep(K_MSEC(100));
+// 		}
+// 		LOG_INF("DTR set");
+// 		err = uart_line_ctrl_set(uart, UART_LINE_CTRL_DCD, 1);
+// 		if (err) {
+// 			LOG_WRN("Failed to set DCD, ret code %d", err);
+// 		}
+// 		err = uart_line_ctrl_set(uart, UART_LINE_CTRL_DSR, 1);
+// 		if (err) {
+// 			LOG_WRN("Failed to set DSR, ret code %d", err);
+// 		}
+// 	}
 
-	tx = k_malloc(sizeof(*tx));
+// 	tx = k_malloc(sizeof(*tx));
 
-	if (tx) {
-		pos = snprintf(tx->data, sizeof(tx->data),
-			       "Starting Nordic UART service sample\r\n");
+// 	if (tx) {
+// 		pos = snprintf(tx->data, sizeof(tx->data),
+// 			       "Starting Nordic UART service sample\r\n");
 
-		if ((pos < 0) || (pos >= sizeof(tx->data))) {
-			k_free(rx);
-			k_free(tx);
-			LOG_ERR("snprintf returned %d", pos);
-			return -ENOMEM;
-		}
+// 		if ((pos < 0) || (pos >= sizeof(tx->data))) {
+// 			k_free(rx);
+// 			k_free(tx);
+// 			LOG_ERR("snprintf returned %d", pos);
+// 			return -ENOMEM;
+// 		}
 
-		tx->len = pos;
-	} else {
-		k_free(rx);
-		return -ENOMEM;
-	}
+// 		tx->len = pos;
+// 	} else {
+// 		k_free(rx);
+// 		return -ENOMEM;
+// 	}
 
-	err = uart_tx(uart, tx->data, tx->len, SYS_FOREVER_MS);
-	if (err) {
-		k_free(rx);
-		k_free(tx);
-		LOG_ERR("Cannot display welcome message (err: %d)", err);
-		return err;
-	}
+// 	err = uart_tx(uart, tx->data, tx->len, SYS_FOREVER_MS);
+// 	if (err) {
+// 		k_free(rx);
+// 		k_free(tx);
+// 		LOG_ERR("Cannot display welcome message (err: %d)", err);
+// 		return err;
+// 	}
 
-	err = uart_rx_enable(uart, rx->data, sizeof(rx->data), UART_WAIT_FOR_RX);
-	if (err) {
-		LOG_ERR("Cannot enable uart reception (err: %d)", err);
-		/* Free the rx buffer only because the tx buffer will be handled in the callback */
-		k_free(rx);
-	}
+// 	err = uart_rx_enable(uart, rx->data, sizeof(rx->data), UART_WAIT_FOR_RX);
+// 	if (err) {
+// 		LOG_ERR("Cannot enable uart reception (err: %d)", err);
+// 		/* Free the rx buffer only because the tx buffer will be handled in the callback */
+// 		k_free(rx);
+// 	}
 
-	return err;
-}
+// 	return err;
+// }
 
 static void adv_work_handler(struct k_work *work)
 {
@@ -683,6 +691,8 @@ int main(void)
 	int blink_status = 0;
 	int err = 0;
 
+
+
 	// fem_test_init();
     // fem_test_pulse();   /* put the scope on TX_EN/RX_EN now */
 
@@ -731,6 +741,8 @@ int main(void)
 	k_work_init(&adv_work, adv_work_handler);
 	advertising_start();
 
+	spi_slave_init();
+
 	for (;;) {
 		dk_set_led(RUN_STATUS_LED, (++blink_status) % 2);
 		k_sleep(K_MSEC(RUN_LED_BLINK_INTERVAL));
@@ -745,10 +757,11 @@ void ble_write_thread(void)
 
 	while(1)
 	{
-		tx_size = sprintf(msg, "[%d] Sending data\r\n", counter++);
-		if(ble_connected)
-			bt_nus_send(NULL, msg, tx_size);
 		k_sleep(K_MSEC(1000));
+		// tx_size = sprintf(msg, "[%d] Sending data\r\n", counter++);
+		// if(ble_connected)
+		// bt_nus_send(NULL, msg, tx_size);
+		// k_sleep(K_MSEC(1000));
 	}
 
 	// /* Don't go any further until BLE is initialized */

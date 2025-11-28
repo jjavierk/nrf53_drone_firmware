@@ -1,10 +1,9 @@
 / {
-    /* NUS UART chosen (keeps peripheral_uart happy) */
     chosen {
-        nordic,nus-uart = &uart0;  /* or &cdc_acm0 if you want USB CDC */
+        nordic,nus-uart = &uart0;  /* keeps DT happy; code won't use it */
     };
 
-    /* Disable LED3, since we use P0.31 for nRF21540 RX_EN */
+    /* Disable LED3, since we use P0.31 for FEM RX_EN */
     leds {
         led3: led_3 {
             status = "disabled";
@@ -16,11 +15,59 @@
         compatible = "nordic,nrf-gpio-forwarder";
         status = "okay";
 
+        /* Remove any 'uart { ... }' child here – we don't want 0.10/0.11 forwarded */
         nrf21540-gpio-if {
             gpios = <&gpio0 19 0>,   /* TX_EN */
                     <&gpio0 31 0>,   /* RX_EN */
-                    <&gpio0 20 0>,   /* PDN */
-                    <&gpio1 9  0>;   /* MODE */
+                    <&gpio0 20 0>,   /* PDN  */
+                    <&gpio1  9 0>;   /* MODE */
         };
+    };
+};
+
+&pinctrl {
+    spi2_spis_default: spi2_spis_default {
+        group1 {
+            /* SPIS on: SCK=P0.08, MOSI=P0.09, MISO=P0.10, CSN=P0.11 */
+            psels = <NRF_PSEL(SPIS_SCK,  0, 8)>,
+                    <NRF_PSEL(SPIS_MOSI, 0, 9)>,
+                    <NRF_PSEL(SPIS_MISO, 0, 10)>,
+                    <NRF_PSEL(SPIS_CSN,  0, 11)>;
+        };
+    };
+
+    spi2_spis_sleep: spi2_spis_sleep {
+        group1 {
+            psels = <NRF_PSEL(SPIS_SCK,  0, 8)>,
+                    <NRF_PSEL(SPIS_MOSI, 0, 9)>,
+                    <NRF_PSEL(SPIS_MISO, 0, 10)>,
+                    <NRF_PSEL(SPIS_CSN,  0, 11)>;
+            low-power-enable;
+        };
+    };
+};
+
+&spi2 {
+    compatible = "nordic,nrf-spis";
+    status = "okay";
+
+    def-char = <0x00>;
+
+    pinctrl-0 = <&spi2_spis_default>;
+    pinctrl-1 = <&spi2_spis_sleep>;
+    pinctrl-names = "default", "sleep";
+};
+
+&gpio_fwd {
+    /delete-node/ uart;
+
+    /* keep status + FEM pins as you want them */
+    status = "okay";
+
+    nrf21540-gpio-if {
+        gpios = < &gpio0 19 0 >,    /* TX_EN */
+                < &gpio0 31 0 >,    /* RX_EN */
+                < &gpio0 20 0 >,    /* PDN  */
+                < &gpio1  9 0 >;    /* MODE */
     };
 };
