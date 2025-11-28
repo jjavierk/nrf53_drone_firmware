@@ -36,6 +36,8 @@
 
 #include <zephyr/drivers/gpio.h>
 
+#include "spi_ble_queue.h"
+
 #define LOG_MODULE_NAME peripheral_uart
 LOG_MODULE_REGISTER(LOG_MODULE_NAME);
 
@@ -72,6 +74,14 @@ struct uart_data_t {
 	uint16_t len;
 };
 
+struct k_msgq spi_packet_msgq;
+
+
+K_MSGQ_DEFINE(spi_packet_msgq,
+              sizeof(struct spi_packet),
+              SPI_PACKET_QUEUE_LEN,
+              4); // alignment
+
 static K_FIFO_DEFINE(fifo_uart_tx_data);
 static K_FIFO_DEFINE(fifo_uart_rx_data);
 
@@ -98,6 +108,7 @@ static bool ble_connected = false;
 #include <zephyr/device.h>
 #include <zephyr/drivers/gpio.h>
 #include <zephyr/kernel.h>
+#include <zephyr/bluetooth/gatt.h>
 
 #define FEM_PDN_PIN   20   /* P0.20 */
 #define FEM_TXEN_PIN  19   /* P0.19 */
@@ -109,310 +120,49 @@ static const struct device *gpio1;
 
 void spi_slave_init(void);
 
-void ble_send(uint8_t *data, int size)
+#define NUS_CHUNK_SIZE 60
+
+
+static struct bt_gatt_exchange_params mtu_exchange_params;
+
+static void mtu_exchange_cb(struct bt_conn *conn, uint8_t err,
+                            struct bt_gatt_exchange_params *params)
 {
-	if(ble_connected)
-		bt_nus_send(NULL, data, size);
+    if (!err) {
+        uint16_t mtu = bt_gatt_get_mtu(conn);
+        printk("MTU exchange done, new MTU = %d\n", mtu);
+    } else {
+        printk("MTU exchange failed (err %u)\n", err);
+    }
 }
 
-static void fem_test_init(void)
+void ble_send(uint8_t *data, int size)
 {
-    gpio0 = DEVICE_DT_GET(DT_NODELABEL(gpio0));
-    gpio1 = DEVICE_DT_GET(DT_NODELABEL(gpio1));
-
-    if (!device_is_ready(gpio0) || !device_is_ready(gpio1)) {
-        printk("FEM test: GPIO ports not ready (gpio0=%p, gpio1=%p)\n", gpio0, gpio1);
+    if (!ble_connected) {
         return;
     }
 
-    int ret;
+    struct bt_conn *conn = current_conn; // however you're storing it
+    uint16_t att_mtu = bt_gatt_get_mtu(conn);
+    uint16_t max_payload = att_mtu - 3;  // safe payload per notification
+	//printk("max_payload = %d\r\n", max_payload);
 
-    // All P0.x pins on gpio0
-    ret = gpio_pin_configure(gpio0, FEM_PDN_PIN,  GPIO_OUTPUT_INACTIVE);
-    printk("cfg PDN ret=%d\n", ret);
-    ret = gpio_pin_configure(gpio0, FEM_TXEN_PIN, GPIO_OUTPUT_INACTIVE);
-    printk("cfg TXEN ret=%d\n", ret);
-    ret = gpio_pin_configure(gpio0, FEM_RXEN_PIN, GPIO_OUTPUT_INACTIVE);
-    printk("cfg RXEN ret=%d\n", ret);
+    int offset = 0;
+    while (offset < size) {
+        int chunk = size - offset;
+        if (chunk > max_payload) {
+            chunk = max_payload;
+        }
 
-    // P1.9 on gpio1
-    ret = gpio_pin_configure(gpio1, FEM_MODE_PIN, GPIO_OUTPUT_INACTIVE);
-    printk("cfg MODE ret=%d\n", ret);
+        int err = bt_nus_send(conn, &data[offset], chunk);
+        if (err) {
+            printk("bt_nus_send failed (err %d)\n", err);
+            break;
+        }
 
-    // Power up FEM and set MODE=1
-    gpio_pin_set(gpio0, FEM_PDN_PIN, 1);   // P0.20
-    gpio_pin_set(gpio1, FEM_MODE_PIN, 1);  // P1.09
-
-    printk("FEM test: PDN=1, MODE=1\n");
-}
-
-static void fem_test_pulse(void)
-{
-    printk("FEM test: pulsing TX_EN / RX_EN (slow)\n");
-
-    while(1) {
-        // TX_EN on P0.19 (gpio0)
-        gpio_pin_set(gpio0, FEM_TXEN_PIN, 1);
-        k_msleep(200);
-        gpio_pin_set(gpio0, FEM_TXEN_PIN, 0);
-        k_msleep(200);
-
-        // RX_EN on P0.31 (gpio0)
-        gpio_pin_set(gpio0, FEM_RXEN_PIN, 1);
-        k_msleep(200);
-        gpio_pin_set(gpio0, FEM_RXEN_PIN, 0);
-        k_msleep(200);
+        offset += chunk;
     }
-
-    printk("FEM test: done\n");
 }
-
-
-// static void uart_cb(const struct device *dev, struct uart_event *evt, void *user_data)
-// {
-// 	ARG_UNUSED(dev);
-
-// 	static size_t aborted_len;
-// 	struct uart_data_t *buf;
-// 	static uint8_t *aborted_buf;
-// 	static bool disable_req;
-
-// 	switch (evt->type) {
-// 	case UART_TX_DONE:
-// 		LOG_DBG("UART_TX_DONE");
-// 		if ((evt->data.tx.len == 0) ||
-// 		    (!evt->data.tx.buf)) {
-// 			return;
-// 		}
-
-// 		if (aborted_buf) {
-// 			buf = CONTAINER_OF(aborted_buf, struct uart_data_t,
-// 					   data[0]);
-// 			aborted_buf = NULL;
-// 			aborted_len = 0;
-// 		} else {
-// 			buf = CONTAINER_OF(evt->data.tx.buf, struct uart_data_t,
-// 					   data[0]);
-// 		}
-
-// 		k_free(buf);
-
-// 		buf = k_fifo_get(&fifo_uart_tx_data, K_NO_WAIT);
-// 		if (!buf) {
-// 			return;
-// 		}
-
-// 		if (uart_tx(uart, buf->data, buf->len, SYS_FOREVER_MS)) {
-// 			LOG_WRN("Failed to send data over UART");
-// 		}
-
-// 		break;
-
-// 	case UART_RX_RDY:
-// 		LOG_DBG("UART_RX_RDY");
-// 		buf = CONTAINER_OF(evt->data.rx.buf, struct uart_data_t, data[0]);
-// 		buf->len += evt->data.rx.len;
-
-// 		if (disable_req) {
-// 			return;
-// 		}
-
-// 		if ((evt->data.rx.buf[buf->len - 1] == '\n') ||
-// 		    (evt->data.rx.buf[buf->len - 1] == '\r')) {
-// 			disable_req = true;
-// 			uart_rx_disable(uart);
-// 		}
-
-// 		break;
-
-// 	case UART_RX_DISABLED:
-// 		LOG_DBG("UART_RX_DISABLED");
-// 		disable_req = false;
-
-// 		buf = k_malloc(sizeof(*buf));
-// 		if (buf) {
-// 			buf->len = 0;
-// 		} else {
-// 			LOG_WRN("Not able to allocate UART receive buffer");
-// 			k_work_reschedule(&uart_work, UART_WAIT_FOR_BUF_DELAY);
-// 			return;
-// 		}
-
-// 		uart_rx_enable(uart, buf->data, sizeof(buf->data),
-// 			       UART_WAIT_FOR_RX);
-
-// 		break;
-
-// 	case UART_RX_BUF_REQUEST:
-// 		LOG_DBG("UART_RX_BUF_REQUEST");
-// 		buf = k_malloc(sizeof(*buf));
-// 		if (buf) {
-// 			buf->len = 0;
-// 			uart_rx_buf_rsp(uart, buf->data, sizeof(buf->data));
-// 		} else {
-// 			LOG_WRN("Not able to allocate UART receive buffer");
-// 		}
-
-// 		break;
-
-// 	case UART_RX_BUF_RELEASED:
-// 		LOG_DBG("UART_RX_BUF_RELEASED");
-// 		buf = CONTAINER_OF(evt->data.rx_buf.buf, struct uart_data_t,
-// 				   data[0]);
-
-// 		if (buf->len > 0) {
-// 			k_fifo_put(&fifo_uart_rx_data, buf);
-// 		} else {
-// 			k_free(buf);
-// 		}
-
-// 		break;
-
-// 	case UART_TX_ABORTED:
-// 		LOG_DBG("UART_TX_ABORTED");
-// 		if (!aborted_buf) {
-// 			aborted_buf = (uint8_t *)evt->data.tx.buf;
-// 		}
-
-// 		aborted_len += evt->data.tx.len;
-// 		buf = CONTAINER_OF((void *)aborted_buf, struct uart_data_t,
-// 				   data);
-
-// 		uart_tx(uart, &buf->data[aborted_len],
-// 			buf->len - aborted_len, SYS_FOREVER_MS);
-
-// 		break;
-
-// 	default:
-// 		break;
-// 	}
-// }
-
-// static void uart_work_handler(struct k_work *item)
-// {
-// 	struct uart_data_t *buf;
-
-// 	buf = k_malloc(sizeof(*buf));
-// 	if (buf) {
-// 		buf->len = 0;
-// 	} else {
-// 		LOG_WRN("Not able to allocate UART receive buffer");
-// 		k_work_reschedule(&uart_work, UART_WAIT_FOR_BUF_DELAY);
-// 		return;
-// 	}
-
-// 	uart_rx_enable(uart, buf->data, sizeof(buf->data), UART_WAIT_FOR_RX);
-// }
-
-// static bool uart_test_async_api(const struct device *dev)
-// {
-// 	const struct uart_driver_api *api =
-// 			(const struct uart_driver_api *)dev->api;
-
-// 	return (api->callback_set != NULL);
-// }
-
-// static int uart_init(void)
-// {
-// 	int err;
-// 	int pos;
-// 	struct uart_data_t *rx;
-// 	struct uart_data_t *tx;
-
-// 	if (!device_is_ready(uart)) {
-// 		return -ENODEV;
-// 	}
-
-// 	if (IS_ENABLED(CONFIG_USB_DEVICE_STACK)) {
-// 		err = usb_enable(NULL);
-// 		if (err && (err != -EALREADY)) {
-// 			LOG_ERR("Failed to enable USB");
-// 			return err;
-// 		}
-// 	}
-
-// 	rx = k_malloc(sizeof(*rx));
-// 	if (rx) {
-// 		rx->len = 0;
-// 	} else {
-// 		return -ENOMEM;
-// 	}
-
-// 	k_work_init_delayable(&uart_work, uart_work_handler);
-
-
-// 	if (IS_ENABLED(CONFIG_UART_ASYNC_ADAPTER) && !uart_test_async_api(uart)) {
-// 		/* Implement API adapter */
-// 		uart_async_adapter_init(async_adapter, uart);
-// 		uart = async_adapter;
-// 	}
-
-// 	err = uart_callback_set(uart, uart_cb, NULL);
-// 	if (err) {
-// 		k_free(rx);
-// 		LOG_ERR("Cannot initialize UART callback");
-// 		return err;
-// 	}
-
-// 	if (IS_ENABLED(CONFIG_UART_LINE_CTRL)) {
-// 		LOG_INF("Wait for DTR");
-// 		while (true) {
-// 			uint32_t dtr = 0;
-
-// 			uart_line_ctrl_get(uart, UART_LINE_CTRL_DTR, &dtr);
-// 			if (dtr) {
-// 				break;
-// 			}
-// 			/* Give CPU resources to low priority threads. */
-// 			k_sleep(K_MSEC(100));
-// 		}
-// 		LOG_INF("DTR set");
-// 		err = uart_line_ctrl_set(uart, UART_LINE_CTRL_DCD, 1);
-// 		if (err) {
-// 			LOG_WRN("Failed to set DCD, ret code %d", err);
-// 		}
-// 		err = uart_line_ctrl_set(uart, UART_LINE_CTRL_DSR, 1);
-// 		if (err) {
-// 			LOG_WRN("Failed to set DSR, ret code %d", err);
-// 		}
-// 	}
-
-// 	tx = k_malloc(sizeof(*tx));
-
-// 	if (tx) {
-// 		pos = snprintf(tx->data, sizeof(tx->data),
-// 			       "Starting Nordic UART service sample\r\n");
-
-// 		if ((pos < 0) || (pos >= sizeof(tx->data))) {
-// 			k_free(rx);
-// 			k_free(tx);
-// 			LOG_ERR("snprintf returned %d", pos);
-// 			return -ENOMEM;
-// 		}
-
-// 		tx->len = pos;
-// 	} else {
-// 		k_free(rx);
-// 		return -ENOMEM;
-// 	}
-
-// 	err = uart_tx(uart, tx->data, tx->len, SYS_FOREVER_MS);
-// 	if (err) {
-// 		k_free(rx);
-// 		k_free(tx);
-// 		LOG_ERR("Cannot display welcome message (err: %d)", err);
-// 		return err;
-// 	}
-
-// 	err = uart_rx_enable(uart, rx->data, sizeof(rx->data), UART_WAIT_FOR_RX);
-// 	if (err) {
-// 		LOG_ERR("Cannot enable uart reception (err: %d)", err);
-// 		/* Free the rx buffer only because the tx buffer will be handled in the callback */
-// 		k_free(rx);
-// 	}
-
-// 	return err;
-// }
 
 static void adv_work_handler(struct k_work *work)
 {
@@ -448,6 +198,32 @@ static void connected(struct bt_conn *conn, uint8_t err)
 	current_conn = bt_conn_ref(conn);
 
 	dk_set_led_on(CON_STATUS_LED);
+
+
+	/*  Example: request 30–50 ms connection interval, no latency, 4 s timeout
+     *  min_interval = 24 * 1.25 ms = 30 ms
+     *  max_interval = 40 * 1.25 ms = 50 ms
+     *  timeout      = 400 * 10 ms = 4 s
+     */
+    struct bt_le_conn_param param = {
+        .interval_min = 12,
+        .interval_max = 24,
+        .latency      = 0,
+        .timeout      = 500,
+    };
+
+    int rc = bt_conn_le_param_update(conn, &param);
+    if (rc) {
+        printk("conn param update failed (err %d)\n", rc);
+    }
+
+	mtu_exchange_params.func = mtu_exchange_cb;
+
+    int ret = bt_gatt_exchange_mtu(conn, &mtu_exchange_params);
+    
+	if (ret) {
+        printk("bt_gatt_exchange_mtu failed (err %d)\n", ret);
+    }
 }
 
 static void disconnected(struct bt_conn *conn, uint8_t reason)
@@ -669,41 +445,10 @@ void button_changed(uint32_t button_state, uint32_t has_changed)
 }
 #endif /* CONFIG_BT_NUS_SECURITY_ENABLED */
 
-static void configure_gpio(void)
-{
-	int err;
-
-#ifdef CONFIG_BT_NUS_SECURITY_ENABLED
-	err = dk_buttons_init(button_changed);
-	if (err) {
-		LOG_ERR("Cannot init buttons (err: %d)", err);
-	}
-#endif /* CONFIG_BT_NUS_SECURITY_ENABLED */
-
-	err = dk_leds_init();
-	if (err) {
-		LOG_ERR("Cannot init LEDs (err: %d)", err);
-	}
-}
-
 int main(void)
 {
 	int blink_status = 0;
 	int err = 0;
-
-
-
-	// fem_test_init();
-    // fem_test_pulse();   /* put the scope on TX_EN/RX_EN now */
-
-	// while(1);
-	
-	//configure_gpio();
-
-	// err = uart_init();
-	// if (err) {
-	// 	error();
-	// }
 
 	if (IS_ENABLED(CONFIG_BT_NUS_SECURITY_ENABLED)) {
 		err = bt_conn_auth_cb_register(&conn_auth_callbacks);
@@ -750,53 +495,26 @@ int main(void)
 }
 
 void ble_write_thread(void)
-{	
-	int counter = 0;
-	uint8_t msg[100];
-	int16_t tx_size = 0;
+{
+    struct spi_packet pkt;
 
-	while(1)
-	{
-		k_sleep(K_MSEC(1000));
-		// tx_size = sprintf(msg, "[%d] Sending data\r\n", counter++);
-		// if(ble_connected)
-		// bt_nus_send(NULL, msg, tx_size);
-		// k_sleep(K_MSEC(1000));
-	}
+    while (1) {
+        /* Block until a SPI packet arrives */
+        int ret = k_msgq_get(&spi_packet_msgq, &pkt, K_FOREVER);
+        if (ret != 0) {
+            continue;
+        }
 
-	// /* Don't go any further until BLE is initialized */
-	// k_sem_take(&ble_init_ok, K_FOREVER);
-	// struct uart_data_t nus_data = {
-	// 	.len = 0,
-	// };
+        /* Safety: only send if BLE is connected */
+        if (!ble_connected) {
+            // Option A: drop silently
+            // Option B: requeue with a delay (careful with backpressure)
+            continue;
+        }
 
-	// for (;;) {
-	// 	/* Wait indefinitely for data to be sent over bluetooth */
-	// 	struct uart_data_t *buf = k_fifo_get(&fifo_uart_rx_data,
-	// 					     K_FOREVER);
-
-	// 	int plen = MIN(sizeof(nus_data.data) - nus_data.len, buf->len);
-	// 	int loc = 0;
-
-	// 	while (plen > 0) {
-	// 		memcpy(&nus_data.data[nus_data.len], &buf->data[loc], plen);
-	// 		nus_data.len += plen;
-	// 		loc += plen;
-
-	// 		if (nus_data.len >= sizeof(nus_data.data) ||
-	// 		   (nus_data.data[nus_data.len - 1] == '\n') ||
-	// 		   (nus_data.data[nus_data.len - 1] == '\r')) {
-	// 			if (bt_nus_send(NULL, nus_data.data, nus_data.len)) {
-	// 				LOG_WRN("Failed to send data over BLE connection");
-	// 			}
-	// 			nus_data.len = 0;
-	// 		}
-
-	// 		plen = MIN(sizeof(nus_data.data), buf->len - loc);
-	// 	}
-
-	// 	k_free(buf);
-	// }
+        /* Reuse your MTU-aware ble_send() */
+        ble_send(pkt.data, pkt.len);
+    }
 }
 
 K_THREAD_DEFINE(ble_write_thread_id, STACKSIZE, ble_write_thread, NULL, NULL,

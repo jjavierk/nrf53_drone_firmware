@@ -14,4 +14,9 @@ target_sources(app PRIVATE
   src/spi_slave.c
 )
 
+# Tell Zephyr where to find spi_ble_queue.h
+target_include_directories(app PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/inc
+)
+
 # NORDIC SDK APP END

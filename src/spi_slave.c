@@ -4,6 +4,8 @@
 #include <zephyr/drivers/spi.h>
 #include <zephyr/sys/printk.h>
 #include <bluetooth/services/nus.h>
+#include "spi_ble_queue.h"
+
 
 #define LOG_LEVEL LOG_LEVEL_DBG
 #include <zephyr/logging/log.h>
@@ -37,16 +39,18 @@ int counter = 0;
 uint8_t msg[100];
 int16_t tx_size = 0;
 
+extern struct k_msgq spi_packet_msgq;
+
 static void spi_slave_thread(void *p1, void *p2, void *p3)
 {
     ARG_UNUSED(p1); ARG_UNUSED(p2); ARG_UNUSED(p3);
 
     if (!device_is_ready(spi_dev)) {
-        printk("SPIS device not ready");
+        LOG_INF("SPIS device not ready");
         return;
     }
 
-    printk("SPI slave thread started");
+    LOG_INF("SPI slave thread started");
 
     while (1) {
         struct spi_buf rx_buf = {
@@ -59,11 +63,30 @@ static void spi_slave_thread(void *p1, void *p2, void *p3)
         };
 
         int ret = spi_read(spi_dev, &spi_cfg, &rx);
+        
+        if (ret <= 0) {
+            // you may want to LOG_ERR or handle specific errors here
+            continue;
+        }
 
+        // First two bytes are header + packet size → payload starts at index 2
+        int payload_len = ret - 2;
+        if (payload_len <= 0) {
+            continue;
+        }
+        if (payload_len > SPI_PACKET_MAX_LEN) {
+            payload_len = SPI_PACKET_MAX_LEN;  // clamp, or drop if you prefer
+        }
 
-        if (ret>0) {
-            printk("spi_read ret=%d, len=%u\r\n", ret, rx_buf.len);
-            ble_send(&spi_rx_buf[2], ret-2); // First two bytes are header + PCK size. TODO: add checks
+        struct spi_packet pkt;
+        pkt.len = (uint16_t)payload_len;
+        memcpy(pkt.data, &spi_rx_buf[2], pkt.len);
+
+        int qret = k_msgq_put(&spi_packet_msgq, &pkt, K_NO_WAIT);
+        if (qret != 0) {
+            // queue full → decide policy: drop oldest, drop new, or block
+            // simple approach: drop and optionally count/log
+            // LOG_WRN("SPI packet queue full, dropping packet");
         }
 
     }
@@ -71,8 +94,7 @@ static void spi_slave_thread(void *p1, void *p2, void *p3)
 
 void spi_slave_init(void)
 {
-    printk("spi_slave_init() via printk\n");
-    LOG_INF("spi_slave_init() via LOG_INF");
+    
 
     k_thread_create(&spi_slave_thread_data,
                 spi_slave_stack,
@@ -82,4 +104,6 @@ void spi_slave_init(void)
                 SPI_SLAVE_PRIORITY, 0, K_NO_WAIT);
 
     k_thread_name_set(&spi_slave_thread_data, "spi_slave");
+
+    LOG_INF("spi_slave_init() finished");
 }
