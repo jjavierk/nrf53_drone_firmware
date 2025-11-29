@@ -13,7 +13,7 @@ LOG_MODULE_REGISTER(spi_slave);
 
 #define SPI_SLAVE_STACK_SIZE 2048 
 #define SPI_SLAVE_PRIORITY   5
-#define SPI_RX_BUF_SIZE      500
+#define SPI_RX_BUF_SIZE      200
 
 #define SPI_SLAVE_NODE DT_NODELABEL(spi2)
 static const struct device *const spi_dev = DEVICE_DT_GET(SPI_SLAVE_NODE);
@@ -66,6 +66,7 @@ static void spi_slave_thread(void *p1, void *p2, void *p3)
         
         if (ret <= 0) {
             // you may want to LOG_ERR or handle specific errors here
+            LOG_ERR("ERROR receiving SPIS data");
             continue;
         }
 
@@ -92,18 +93,11 @@ static void spi_slave_thread(void *p1, void *p2, void *p3)
     }
 }
 
-void spi_slave_init(void)
-{
-    
-
-    k_thread_create(&spi_slave_thread_data,
-                spi_slave_stack,
-                K_THREAD_STACK_SIZEOF(spi_slave_stack),
+/* Thread starts automatically at boot */
+K_THREAD_DEFINE(spi_slave_thread_id,
+                SPI_SLAVE_STACK_SIZE,
                 spi_slave_thread,
                 NULL, NULL, NULL,
-                SPI_SLAVE_PRIORITY, 0, K_NO_WAIT);
-
-    k_thread_name_set(&spi_slave_thread_data, "spi_slave");
-
-    LOG_INF("spi_slave_init() finished");
-}
+                SPI_SLAVE_PRIORITY,
+                0,
+                0);

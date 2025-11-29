@@ -12,6 +12,7 @@ project(peripheral_uart)
 target_sources(app PRIVATE
   src/main.c
   src/spi_slave.c
+  src/ble_comm.c
 )
 
 # Tell Zephyr where to find spi_ble_queue.h

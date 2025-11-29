@@ -4,6 +4,7 @@
         "errno.h": "c",
         "gpio.h": "c",
         "spi.h": "c",
-        "kernel.h": "c"
+        "kernel.h": "c",
+        "ble_comm.h": "c"
     }
 }
