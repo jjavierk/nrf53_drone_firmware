@@ -1,4 +1,5 @@
 #include "ble_comm.h"
+#include "spi_ble_queue.h"
 
 LOG_MODULE_REGISTER(ble_comm, LOG_LEVEL_INF);
 
@@ -43,12 +44,83 @@ UART_ASYNC_ADAPTER_INST_DEFINE(async_adapter);
 #define async_adapter NULL
 #endif
 
+#define BLE_HANDSHAKE_IN_NODE   DT_NODELABEL(gpio0)
+#define BLE_HANDSHAKE_OUT_NODE  DT_NODELABEL(gpio1)
+
+#define BLE_HANDSHAKE_IN_PIN    12   /* P0.12 */
+#define BLE_HANDSHAKE_OUT_PIN   0    /* P1.00 */
+
+static const struct device * const gpio0_dev = DEVICE_DT_GET(BLE_HANDSHAKE_IN_NODE);
+static const struct device * const gpio1_dev = DEVICE_DT_GET(BLE_HANDSHAKE_OUT_NODE);
+
 static bool ble_connected = false;
 
-#include "spi_ble_queue.h"   // make sure this is present at the top
 bool ble_comm_is_connected(void)
 {
     return ble_connected;
+}
+
+
+static int ble_handshake_gpio_init(void)
+{
+    int ret;
+
+    if (!device_is_ready(gpio0_dev)) {
+        printk("gpio0 device not ready\n");
+        return -ENODEV;
+    }
+
+    if (!device_is_ready(gpio1_dev)) {
+        printk("gpio1 device not ready\n");
+        return -ENODEV;
+    }
+
+    /* P0.12 as input (you can change pull if needed) */
+    ret = gpio_pin_configure(gpio0_dev,
+                             BLE_HANDSHAKE_IN_PIN,
+                             GPIO_INPUT | GPIO_PULL_DOWN);
+    if (ret) {
+        printk("Failed to config P0.12 as input: %d\n", ret);
+        return ret;
+    }
+
+    /* P1.00 as output, default low, active-high */
+    ret = gpio_pin_configure(gpio1_dev,
+                             BLE_HANDSHAKE_OUT_PIN,
+                             GPIO_OUTPUT_INACTIVE | GPIO_ACTIVE_HIGH);
+    if (ret) {
+        printk("Failed to config P1.00 as output: %d\n", ret);
+        return ret;
+    }
+
+    return 0;
+}
+
+void ble_handshake_set(bool level)
+{
+    /* level = true → set P1.00 high (slave has data)
+     * level = false → set P1.00 low
+     */
+    gpio_pin_set(gpio1_dev, BLE_HANDSHAKE_OUT_PIN, level ? 1 : 0);
+}
+
+int ble_handshake_read(void)
+{
+    /* Read P0.12 (master signal) */
+    return gpio_pin_get(gpio0_dev, BLE_HANDSHAKE_IN_PIN);
+}
+
+
+void ble_handshake_toggle()
+{
+    /* level = true → set P1.00 high (slave has data)
+     * level = false → set P1.00 low
+     */
+    int ret = gpio_pin_toggle(gpio1_dev, BLE_HANDSHAKE_OUT_PIN);
+
+	if (ret) {
+        printk("Failed to toggle P1.00: %d\n", ret);
+    }
 }
 
 
@@ -323,6 +395,8 @@ static void bt_receive_cb(struct bt_conn *conn, const uint8_t *const data,
 
 	LOG_INF("Received data from: %s", addr);
 
+	ble_handshake_toggle();
+
 	for (uint16_t pos = 0; pos != len;) {
 		struct uart_data_t *tx = k_malloc(sizeof(*tx));
 
@@ -408,6 +482,13 @@ void button_changed(uint32_t button_state, uint32_t has_changed)
 int ble_comm_init(void)
 {
 	int err = 0;
+
+	err = ble_handshake_gpio_init();
+
+    if (err) {
+        printk("Handshake GPIO init failed: %d\n", err);
+        return err;
+    }
 
 	if (IS_ENABLED(CONFIG_BT_NUS_SECURITY_ENABLED)) {
 		err = bt_conn_auth_cb_register(&conn_auth_callbacks);

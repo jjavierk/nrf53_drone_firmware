@@ -12,8 +12,6 @@
 
 void spi_slave_init(void);
 
-
-
 int main(void)
 {
 	int blink_status = 0;
