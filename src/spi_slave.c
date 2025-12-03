@@ -6,6 +6,7 @@
 #include <bluetooth/services/nus.h>
 #include "spi_ble_queue.h"
 #include "nRF_commands.h"
+#include "ble_comm.h"
 
 
 #define LOG_LEVEL LOG_LEVEL_DBG
@@ -56,9 +57,19 @@ void set_ble_pck_size()
     // is what you want to send back on the next transaction.
     // Adjust to your real protocol.
 
+
     spi_tx_buf[0] = 0x55;
-    spi_tx_buf[1] = BLE_UART_MSG;
-    spi_tx_buf[2] = sizeof(msg);
+
+    if(get_nus_ble_data_available())
+    {
+        spi_tx_buf[1] = BLE_UART_MSG;
+        spi_tx_buf[2] = (uint8_t) get_nus_ble_data_len();
+    }
+    else
+    {
+        spi_tx_buf[1] = BLE_NO_MSG;
+        spi_tx_buf[2] = 0;
+    }
 
     LOG_INF("spi_tx_buf[2] = %d, and size = %d", spi_tx_buf[2], sizeof(msg));
 
@@ -92,14 +103,17 @@ void set_ble_pck_data()
     spi_tx_buf[0] = 0x55;
     spi_tx_buf[1] = _RETRIEVE_BLE_PCK;
 
-    for(int inx_data = 0; inx_data<sizeof(msg); inx_data++)
+    uint8_t *nus_data = get_nus_ble_data();
+    int ble_data_len = get_nus_ble_data_len();
+
+    for(int inx_data = 0; inx_data<ble_data_len; inx_data++)
     {
-        spi_tx_buf[inx_data+2] = msg[inx_data];
+        spi_tx_buf[inx_data+2] = nus_data[inx_data];
     }
 
-    spi_tx_buf[2+sizeof(msg)] = 0xAA;
+    spi_tx_buf[2+ble_data_len] = 0xAA;
     
-    spi_tx_len = 3+sizeof(msg);
+    spi_tx_len = 3+ble_data_len;
 
     // Prepare TX buffers
     struct spi_buf tx_buf = {
@@ -118,6 +132,9 @@ void set_ble_pck_data()
     } else {
         LOG_DBG("Sent %d frames to master", tret);
     }
+
+    reset_nus_ble_data_available();
+    
 }
 
 
@@ -157,8 +174,10 @@ static void spi_slave_thread(void *p1, void *p2, void *p3)
 
         if(payload_len >= 0)
         {
+            LOG_INF("Master-Request: 0x%x", spi_rx_buf[0]);
             switch (spi_rx_buf[0])
-            {
+            {               
+            
                 /* Set the buffers so it can be read by the master */
             case _SET_BLE_BUFFER_NORDIC:
                 LOG_INF("SPIS: Setting PACKET size!");
@@ -169,9 +188,10 @@ static void spi_slave_thread(void *p1, void *p2, void *p3)
                 LOG_INF("SPIS: Sending PCK!");
                 set_ble_pck_data();
                 break;
-            
-            default:
-                /* By default, send the data */
+                
+            case _SEND_OVER_NUS:
+                
+                /* Send the data over NUS/BLE */
                 if (payload_len <= 0) {
                     continue;
                 }
@@ -190,6 +210,11 @@ static void spi_slave_thread(void *p1, void *p2, void *p3)
                     // LOG_WRN("SPI packet queue full, dropping packet");
                 }
                 break;
+                
+            default:
+                /* Do nothing with packets that are unknown */
+                break;
+                
             }
         }
 

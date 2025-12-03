@@ -385,6 +385,33 @@ static struct bt_conn_auth_cb conn_auth_callbacks;
 static struct bt_conn_auth_info_cb conn_auth_info_callbacks;
 #endif
 
+uint8_t nus_ble_data[255];
+int nus_ble_data_len = 0;
+bool nus_ble_data_available = false;
+
+bool get_nus_ble_data_available()
+{
+	if(nus_ble_data_available)
+		return true;
+
+	return false;
+}
+
+void reset_nus_ble_data_available()
+{
+	nus_ble_data_available = false;
+}
+
+int get_nus_ble_data_len()
+{
+	return nus_ble_data_len;
+}
+
+uint8_t * get_nus_ble_data()
+{
+	return nus_ble_data;
+}
+
 static void bt_receive_cb(struct bt_conn *conn, const uint8_t *const data,
 			  uint16_t len)
 {
@@ -397,40 +424,46 @@ static void bt_receive_cb(struct bt_conn *conn, const uint8_t *const data,
 
 	ble_handshake_toggle();
 
-	for (uint16_t pos = 0; pos != len;) {
-		struct uart_data_t *tx = k_malloc(sizeof(*tx));
+	memcpy(nus_ble_data, data, len);
 
-		if (!tx) {
-			LOG_WRN("Not able to allocate UART send data buffer");
-			return;
-		}
+	nus_ble_data_len = len;
 
-		/* Keep the last byte of TX buffer for potential LF char. */
-		size_t tx_data_size = sizeof(tx->data) - 1;
+	nus_ble_data_available = true;
 
-		if ((len - pos) > tx_data_size) {
-			tx->len = tx_data_size;
-		} else {
-			tx->len = (len - pos);
-		}
+	// for (uint16_t pos = 0; pos != len;) {
+	// 	struct uart_data_t *tx = k_malloc(sizeof(*tx));
 
-		memcpy(tx->data, &data[pos], tx->len);
+	// 	if (!tx) {
+	// 		LOG_WRN("Not able to allocate UART send data buffer");
+	// 		return;
+	// 	}
 
-		pos += tx->len;
+	// 	/* Keep the last byte of TX buffer for potential LF char. */
+	// 	size_t tx_data_size = sizeof(tx->data) - 1;
 
-		/* Append the LF character when the CR character triggered
-		 * transmission from the peer.
-		 */
-		if ((pos == len) && (data[len - 1] == '\r')) {
-			tx->data[tx->len] = '\n';
-			tx->len++;
-		}
+	// 	if ((len - pos) > tx_data_size) {
+	// 		tx->len = tx_data_size;
+	// 	} else {
+	// 		tx->len = (len - pos);
+	// 	}
 
-		err = uart_tx(uart, tx->data, tx->len, SYS_FOREVER_MS);
-		if (err) {
-			k_fifo_put(&fifo_uart_tx_data, tx);
-		}
-	}
+	// 	memcpy(tx->data, &data[pos], tx->len);
+
+	// 	pos += tx->len;
+
+	// 	/* Append the LF character when the CR character triggered
+	// 	 * transmission from the peer.
+	// 	 */
+	// 	if ((pos == len) && (data[len - 1] == '\r')) {
+	// 		tx->data[tx->len] = '\n';
+	// 		tx->len++;
+	// 	}
+
+	// 	err = uart_tx(uart, tx->data, tx->len, SYS_FOREVER_MS);
+	// 	if (err) {
+	// 		k_fifo_put(&fifo_uart_tx_data, tx);
+	// 	}
+	// }
 }
 
 static struct bt_nus_cb nus_cb = {

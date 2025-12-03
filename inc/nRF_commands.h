@@ -24,9 +24,12 @@
 #define _ENABLE_ANALOG					0x55
 #define _DISABLE_ANALOG					0x50
 #define _LEAVING_MASTER_MODE            0XF0
+
 #define _SET_BLE_BUFFER_NORDIC          0x36
 #define _RETRIEVE_BLE_PCK_SIZE          0X37
 #define _RETRIEVE_BLE_PCK               0x38
+#define _SEND_OVER_NUS                  0x69
+
 #define _ENQ_BATTERY_VOLTAGE_VALUE    	0x14
 #define _ENQ_8_RC_CHANNELS              0x15
 
@@ -36,15 +39,12 @@
 #define _LED_2_ON                       0x25
 #define _LED_2_OFF                      0x26
 
-
-
-
 /*Multi-shot commands - - - - - - - - - - - - - - - - - - - - - - - - -*/
-#define _SEND_OVR_BT_STREAM             0x69
 #define	_SEND_OVR_BT_SINGLE				0x66
 #define _ENABLE_BLE						0x35
 
 #define BLE_UART_MSG                    0x40
+#define BLE_NO_MSG                      0x41
 
 /*SPI PACKET IDENT DEFINES*/
 /*SPI packets will be defined*/

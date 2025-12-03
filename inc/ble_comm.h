@@ -72,4 +72,12 @@ bool ble_comm_is_connected(void);
 /* Send data over NUS. Splitting into chunks if needed, if you want. */
 int ble_comm_send(const uint8_t *data, size_t len);
 
+bool get_nus_ble_data_available();
+
+uint8_t * get_nus_ble_data();
+
+void reset_nus_ble_data_available();
+
+int get_nus_ble_data_len();
+
 #endif /* BLE_COMM_H_ */
